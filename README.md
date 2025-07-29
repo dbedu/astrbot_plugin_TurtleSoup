@@ -200,7 +200,7 @@ ID: 001
 ## 📚 相关链接
 
 - 🏠 [AstrBot 官网](https://astrbot.app)
-- 📖 [AstrBot 文档](https://astrbot.app/docs)
+- 📖 [AstrBot 文档](https://docs.astrbot.app)
 - 💬 [问题反馈](https://github.com/anchorAnc/astrbot_plugin_TurtleSoup/issues)
 
 **如果这个插件对你有帮助，请给个⭐Star支持一下！**
