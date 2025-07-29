@@ -1,5 +1,5 @@
-name: turtlesoup
-desc: 海龟汤互动解谜游戏，支持LLM自动判题和自定义海龟汤预设题库。
+name: astrbot_plugin_TurtleSoup
+desc: 海龟汤互动解谜游戏，支持LLM自动判题和自定义海龟汤预设题库
 version: v1.0.0
-author: anchorAnc
+author: anchor
 repo: https://github.com/anchorAnc/astrbot_plugin_TurtleSoup
