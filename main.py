@@ -85,8 +85,9 @@ class TurtleSoupPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.session_timeout = 600
-        self.max_questions = 20
+        # 优先使用配置文件参数，否则用默认值
+        self.session_timeout = getattr(config, "session_timeout", 1000)
+        self.max_questions = getattr(config, "max_questions", 40)
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.questions_file_path = os.path.join(plugin_dir, "questions_database.txt")
         self.questions_bank = self._parse_questions_bank()
