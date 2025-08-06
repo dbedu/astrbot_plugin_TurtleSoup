@@ -722,7 +722,7 @@ class TurtleSoupPlugin(Star):
             return
 
         # 调用AI进行判断
-        await event.send(MessageChain([Comp.Plain(self.MSG_AI_THINKING)]))
+        #await event.send(MessageChain([Comp.Plain(self.MSG_AI_THINKING)]))
         
         try:
             ai_answer = await self._get_ai_judge_response(question, game_state, event.get_session_id())
