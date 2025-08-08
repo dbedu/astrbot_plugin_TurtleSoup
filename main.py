@@ -76,19 +76,24 @@ class TurtleSoupPlugin(Star):
         "提问次数已重置，现在有 {max_questions} 次机会。"
     )
 
+    def _get_session_key(self, event: AstrMessageEvent):
+        """获取当前会话的唯一key，群聊为group_id，私聊为user_id。"""
+        group_id = getattr(event, 'get_group_id', lambda: None)()
+        if group_id:
+            return group_id
+        return event.get_sender_id()
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.session_timeout = 600
-        self.max_questions = 20
-        
+        # 优先使用配置文件参数，否则用默认值
+        self.session_timeout = getattr(config, "session_timeout", 1000)
+        self.max_questions = getattr(config, "max_questions", 40)
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.questions_file_path = os.path.join(plugin_dir, "questions_database.txt")
-        
         self.questions_bank = self._parse_questions_bank()
         logger.info(f"题库初始化完成，共加载 {len(self.questions_bank)} 个题目")
-        
-        self.game_states: Dict[str, dict] = {}
-        
+        self.game_states: Dict[str, dict] = {}  # key: group_id or user_id
+
         # AI提示词配置
         self.hint_system_prompt = (
             "你是海龟汤游戏的出题人。你已经知道了完整的答案。玩家会向你提出问题，你必须严格按照以下规则回答：\n\n"
@@ -211,8 +216,11 @@ class TurtleSoupPlugin(Star):
         用法：/开始海龟汤 [题号]
         """
         user_id = event.get_sender_id()
-        
-        if user_id in self.game_states:
+        group_id = event.get_group_id()  # 获取群组ID，如果是私聊则为None
+
+        session_key = self._get_session_key(event)
+
+        if session_key in self.game_states:
             await event.send(MessageChain([Comp.Plain(self.MSG_GAME_IN_PROGRESS.format(user_id=user_id))]))
             return
 
@@ -250,7 +258,7 @@ class TurtleSoupPlugin(Star):
             "llm_conversation_context": [],
             "controller": None, # 将用于存储会话控制器
         }
-        self.game_states[user_id] = game_state
+        self.game_states[session_key] = game_state
         logger.debug(f"为用户 {user_id} 创建了新的游戏状态。")
 
         # 构造题目介绍信息
@@ -279,7 +287,7 @@ class TurtleSoupPlugin(Star):
         async def turtle_soup_waiter(controller: SessionController, event: AstrMessageEvent):
             """游戏的主循环，处理玩家的每一次输入。"""
             # 首次交互时，存储会话控制器
-            current_game_state = self.game_states.get(user_id)
+            current_game_state = self.game_states.get(session_key)
             if current_game_state and not current_game_state.get("controller"):
                 current_game_state["controller"] = controller
                 logger.debug(f"为用户 {user_id} 的会话存储了 controller。")
@@ -291,14 +299,14 @@ class TurtleSoupPlugin(Star):
             await turtle_soup_waiter(event)
         except asyncio.TimeoutError:
             logger.info(f"用户 {user_id} 的游戏会话超时。")
-            answer = self.game_states.get(user_id, {}).get("answer", "未知")
+            answer = self.game_states.get(session_key, {}).get("answer", "未知")
             await event.send(MessageChain([Comp.Plain(self.MSG_TIMEOUT.format(answer=answer, user_id=user_id))]))
         except Exception as e:
             logger.error(f"海龟汤游戏会话发生未知错误: {e}", exc_info=True)
             await event.send(MessageChain([Comp.Plain(self.MSG_UNKNOWN_ERROR.format(user_id=user_id))]))
         finally:
             logger.debug(f"用户 {user_id} 的会话等待器已结束，执行最终清理。")
-            self._cleanup_game_session(user_id)
+            self._cleanup_game_session(session_key)
             event.stop_event()
 
     @filter.command("题库列表")
@@ -394,8 +402,10 @@ class TurtleSoupPlugin(Star):
         player_input = event.message_str.strip()
         logger.debug(f"用户 {user_id} 的输入: '{player_input}'")
 
+        session_key = self._get_session_key(event)
+
         # 检查游戏是否存在。这是最关键的检查点。
-        game_state = self.game_states.get(user_id)
+        game_state = self.game_states.get(session_key)
         if not game_state:
             logger.warning(f"处理回合时未找到用户 {user_id} 的游戏状态，可能已被清理。忽略此事件。")
             return
@@ -474,15 +484,15 @@ class TurtleSoupPlugin(Star):
             question, answer, metadata = random.choice(self.questions_bank)
             return question, answer, metadata
 
-    def _cleanup_game_session(self, user_id: str):
+    def _cleanup_game_session(self, session_key: tuple):
         """清理指定用户的游戏会话和状态。"""
-        game_state = self.game_states.pop(user_id, None)
-        
+        game_state = self.game_states.pop(session_key, None)
+
         if game_state:
             controller = game_state.get("controller")
             if controller:
                 controller.stop()
-            logger.info(f"用户 {user_id} 的海龟汤游戏状态已清理。")
+            logger.info(f"用户 {session_key} 的海龟汤游戏状态已清理。")
 
     async def _get_ai_judge_response(self, player_question: str, game_state: dict, session_id: str) -> str:
         """获取AI对玩家问题的判断（是/否/无关）。"""
@@ -624,7 +634,8 @@ class TurtleSoupPlugin(Star):
         user_id = event.get_sender_id()
         
         # 检查是否有正在进行的游戏
-        if user_id not in self.game_states:
+        session_key = self._get_session_key(event)
+        if session_key not in self.game_states:
             await event.send(MessageChain([Comp.Plain("❌ 没有正在进行的游戏，请先使用 `/开始海龟汤` 开始游戏。")]))
             event.stop_event()
             return
@@ -649,8 +660,9 @@ class TurtleSoupPlugin(Star):
     async def _handle_turtle_soup_question(self, event: AstrMessageEvent, question: str):
         """处理海龟汤游戏中的提问"""
         user_id = event.get_sender_id()
-        game_state = self.game_states.get(user_id)
-        
+        session_key = self._get_session_key(event)
+        game_state = self.game_states.get(session_key)
+
         if not game_state:
             await event.send(MessageChain([Comp.Plain("❌ 游戏状态异常，请重新开始游戏。")]))
             return
@@ -673,7 +685,7 @@ class TurtleSoupPlugin(Star):
             is_correct = await self._is_answer_correct(question, game_state["answer"], event.get_session_id())
             
             # 再次检查游戏状态，防止在AI判断期间游戏被结束
-            if user_id not in self.game_states:
+            if session_key not in self.game_states:
                 return
 
             if is_correct:
@@ -689,7 +701,7 @@ class TurtleSoupPlugin(Star):
                 correct_text += f"使用 /开始海龟汤 挑战新题目。"
                 
                 await event.send(MessageChain([Comp.Plain(correct_text)]))
-                self._cleanup_game_session(user_id)
+                self._cleanup_game_session(session_key)
                 return
         
         # 检查是否超出提问次数
@@ -706,17 +718,17 @@ class TurtleSoupPlugin(Star):
             timeout_text += f"感谢参与！使用 /开始海龟汤 可以开始新游戏。"
             
             await event.send(MessageChain([Comp.Plain(timeout_text)]))
-            self._cleanup_game_session(user_id)
+            self._cleanup_game_session(session_key)
             return
 
         # 调用AI进行判断
-        await event.send(MessageChain([Comp.Plain(self.MSG_AI_THINKING)]))
+        #await event.send(MessageChain([Comp.Plain(self.MSG_AI_THINKING)]))
         
         try:
             ai_answer = await self._get_ai_judge_response(question, game_state, event.get_session_id())
             
             # 再次检查，防止在AI响应期间游戏被终止
-            if user_id not in self.game_states:
+            if session_key not in self.game_states:
                 return
 
             remaining_questions = self.max_questions - game_state["question_count"]
@@ -735,7 +747,8 @@ class TurtleSoupPlugin(Star):
     async def end_turtle_soup(self, event: AstrMessageEvent):
         """正常结束当前用户的海龟汤游戏。"""
         user_id = event.get_sender_id()
-        game_state = self.game_states.get(user_id)
+        session_key = self._get_session_key(event)
+        game_state = self.game_states.get(session_key)
 
         if game_state:
             answer = game_state.get("answer", "未知")
@@ -755,15 +768,16 @@ class TurtleSoupPlugin(Star):
             
             await event.send(MessageChain([Comp.Plain(end_text)]))
             
-            self._cleanup_game_session(user_id)
+            self._cleanup_game_session(session_key)
         else:
             await event.send(MessageChain([Comp.Plain(self.MSG_NO_GAME_TO_END)]))
 
     async def force_end_turtle_soup(self, event: AstrMessageEvent):
         """强制结束当前用户的海龟汤游戏。"""
         user_id = event.get_sender_id()
-        if user_id in self.game_states:
-            self._cleanup_game_session(user_id)
+        session_key = self._get_session_key(event)
+        if session_key in self.game_states:
+            self._cleanup_game_session(session_key)
             await event.send(MessageChain([Comp.Plain(self.MSG_GAME_FORCE_ENDED)]))
         else:
             await event.send(MessageChain([Comp.Plain(self.MSG_NO_GAME_TO_END)]))
@@ -771,8 +785,9 @@ class TurtleSoupPlugin(Star):
     async def reveal_answer(self, event: AstrMessageEvent):
         """在游戏中提前查看答案。"""
         user_id = event.get_sender_id()
-        if user_id in self.game_states:
-            game_state = self.game_states[user_id]
+        session_key = self._get_session_key(event)
+        if session_key in self.game_states:
+            game_state = self.game_states[session_key]
             metadata = game_state.get("metadata", {})
             
             reveal_text = f"🎯 答案公布 🎯\n\n"
@@ -791,8 +806,9 @@ class TurtleSoupPlugin(Star):
     async def change_question(self, event: AstrMessageEvent):
         """在游戏中更换题目。"""
         user_id = event.get_sender_id()
-        game_state = self.game_states.get(user_id)
-        
+        session_key = self._get_session_key(event)
+        game_state = self.game_states.get(session_key)
+
         if not game_state:
             await event.send(MessageChain([Comp.Plain(self.MSG_NO_GAME_TO_END)]))
             return
@@ -855,9 +871,9 @@ class TurtleSoupPlugin(Star):
 
         stopped_count = len(self.game_states)
         # 创建一个副本进行迭代，因为 _cleanup_game_session 会修改字典
-        for user_id in list(self.game_states.keys()):
-            self._cleanup_game_session(user_id)
-        
+        for session_key in list(self.game_states.keys()):
+            self._cleanup_game_session(session_key)
+
         await event.send(MessageChain([Comp.Plain(
             f"✅ 管理员操作完成。\n"
             f"已强制终止所有 {stopped_count} 个活跃的海龟汤游戏。"
@@ -922,7 +938,7 @@ class TurtleSoupPlugin(Star):
         """插件终止时调用，用于清理所有活跃的游戏会话。"""
         logger.info("正在终止 TurtleSoupPlugin 并清理所有活跃的游戏会话...")
         if self.game_states:
-            for user_id in list(self.game_states.keys()):
-                self._cleanup_game_session(user_id)
+            for session_key in list(self.game_states.keys()):
+                self._cleanup_game_session(session_key)
             logger.info("所有活跃的海龟汤游戏会话已被终止。")
         logger.info("TurtleSoupPlugin terminated。")
