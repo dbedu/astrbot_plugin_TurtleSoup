@@ -191,6 +191,9 @@ ID: 001
 - [@oyxning/astrbot_plugin_textadventure](https://github.com/oyxning/astrbot_plugin_textadventure) - 会话管理和代码架构设计
 
 ### 贡献
+
+感谢 https://github.com/LanRhyme
+
 欢迎提交 Issue 和 Pull Request 来改进这个插件：
 - 🐛 报告 Bug
 - 💡 提出新功能建议  
